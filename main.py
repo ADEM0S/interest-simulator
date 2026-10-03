@@ -11,19 +11,6 @@ def daily_i(i:float, date:datetime.datetime):
     return i / days_in_year
 
 
-class Entry:
-    def __init__(self, date:datetime.datetime, amount:float) -> None:
-        self.date = date
-        self.amount = amount
-
-    @staticmethod
-    def from_str(datestr:str, amountstr:str):
-        return Entry(datetime.datetime.strptime(datestr, DATETIME_PATTERN), float(amountstr))
-
-    def __str__(self) -> str:
-        return f"Entry:\n- date: {self.date}\n- amount: {self.amount}"
-
-
 @dataclass
 class Lot:
     deposit_date: datetime.date
@@ -62,6 +49,7 @@ class Simulator:
             self.lot_stack.append(lot)
             self.balance += lot.amount
         else:
+            lot.amount = -lot.amount
             while self.lot_stack and self.lot_stack[-1].amount <= lot.amount:
                 lot.amount -= self.lot_stack[-1].amount
                 self.lot_stack.pop()
@@ -100,7 +88,46 @@ class Simulator:
         })
 
 
-def parse_history(filepath:str) -> list[Entry]: 
+
+    def run(self, hf_data:list[Lot], end_date:datetime.datetime) -> list[dict]:
+
+        # Starting from the first date,
+        # iterate over the relevant dates and compute the totals
+        # relevant dates are:
+        # - Quarters: 1 Jan, 1 Apr, 1 Jul, 1, Oct
+        #   - Adds fidelity interest of money that stagnated for 12 months
+        #       and for which the end date is in the preceding quarter.
+        # - 1 Jan:
+        #   - Adds base interest computed over the duration of the year
+        #   - I = amount x base_interest x (days_before_end_of_year / days_in_the_year)
+
+        # Entry index
+        lot_i = 0
+        current_date = hf_data[0].deposit_date
+        day_1 = datetime.timedelta(days=1)
+
+        while current_date <= end_date:
+
+            # Deposit interests
+            if current_date.day == 1:
+                if current_date.month == 1:
+                    self.deposit_base_interest()
+                if current_date.month % 3 == 1:
+                    self.deposit_fidelity_interest()
+
+            # Deposit from history
+            while lot_i < len(hf_data) and hf_data[lot_i].deposit_date <= current_date:
+                lot = hf_data[lot_i]
+                self.add(lot)
+                lot_i += 1
+
+            self.update(current_date)
+            current_date += day_1
+
+        return self.history
+
+
+def parse_history(filepath:str) -> list[Lot]: 
     hf_data = []
     try:
         with open(filepath, "r") as hf:
@@ -108,6 +135,7 @@ def parse_history(filepath:str) -> list[Entry]:
             fmt = hf.readline()[:-1]
             print(f"[INFO]: format: {fmt}")
             matches = re.finditer(PATTERN, hf.read())
+            # For future reference if I need to optimize
             # objs = map(lambda tup: (datetime.datetime.strptime(tup[0], "%d/%m/%Y"), float(tup[1]), matches)) 
             # hf_data = list(objs)
             for match in matches:
@@ -121,43 +149,6 @@ def parse_history(filepath:str) -> list[Entry]:
     return sorted(hf_data, key=lambda lot: lot.deposit_date)
 
 
-def simulate(hf_data:list[Lot], b:float, f:float, end_date:datetime.datetime) -> list[dict]:
-    simulator = Simulator(b, f)
-
-    # Starting from the first date,
-    # iterate over the relevant dates and compute the totals
-    # relevant dates are:
-    # - Quarters: 1 Jan, 1 Apr, 1 Jul, 1, Oct
-    #   - Adds fidelity interest of money that stagnated for 12 months
-    #       and for which the end date is in the preceding quarter.
-    # - 1 Jan:
-    #   - Adds base interest computed over the duration of the year
-    #   - I = amount x base_interest x (days_before_end_of_year / days_in_the_year)
-
-    # Entry index
-    lot_i = 0
-    current_date = hf_data[0].deposit_date
-    day_1 = datetime.timedelta(days=1)
-
-    while current_date <= end_date:
-
-        # Deposit interests
-        if current_date.day == 1:
-            if current_date.month == 1:
-                simulator.deposit_base_interest()
-            if current_date.month % 3 == 1:
-                simulator.deposit_fidelity_interest()
-
-        # Deposit from history
-        while lot_i < len(hf_data) and hf_data[lot_i].deposit_date <= current_date:
-            lot = hf_data[lot_i]
-            simulator.add(lot)
-            lot_i += 1
-
-        simulator.update(current_date)
-        current_date += day_1
-
-    return simulator.history
 
 
 def main():
@@ -171,19 +162,20 @@ def main():
     hf_data = parse_history(args.history_file)
     
     print("[INFO]: Parsed History")
-    for d in hf_data:
-        print(d)
+    # for d in hf_data:
+    #     print(d)
 
     print("[INFO]: Starting Simulation")
-    
-    hist = simulate(hf_data, args.base, args.fidelity, args.end_date)
+        
+    simulator = Simulator(args.base, args.fidelity)
+    hist = simulator.run(hf_data, args.end_date)
 
     print("[INFO]: Finished Simulation")
     
-
     import pickle
     with open("history.pickle", "wb") as out:
         pickle.dump(hist, out)
+
 
 if __name__ == "__main__":
     main()
