@@ -177,5 +177,5 @@ def main():
         pickle.dump(hist, out)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__"
     main()
